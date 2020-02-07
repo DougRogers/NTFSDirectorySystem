@@ -1,4 +1,4 @@
-#
+
 #include "NTFS/NTFSDirectorySystem.h"
 
 void callback(std::wstring const& dir, std::wstring const& fileName)
@@ -19,7 +19,6 @@ void callback(std::wstring const& dir, std::wstring const& fileName)
 
 int main(int argc, char* argv[])
 {
-
 	NTFSDirectorySystem parser;
 
 	wchar_t path[MAX_PATH];
@@ -51,7 +50,7 @@ int main(int argc, char* argv[])
 	parser.addToBlackList(L"c:\\solidworks data");
 	parser.addToBlackList(L"c:\\Qt");
 
-	parser.readDisks(4, false);
+	parser.readDisks(DISK_C, false);
 
 	std::set<std::wstring> extensions;
 
@@ -65,5 +64,5 @@ int main(int argc, char* argv[])
 	extensions.insert(L"tif");
 	extensions.insert(L"tiff");
 
-	parser.search(4, extensions, false, callback);
+	parser.search(DISK_C, extensions, false, callback);
 

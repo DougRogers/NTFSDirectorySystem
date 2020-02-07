@@ -1,11 +1,5 @@
 #include "NTFSDirectorySystem.h"
 
-#include "stdafx.h"
-
-#include <commctrl.h>
-#include <windows.h>
-
-
 
 
 NTFSDirectorySystem::NTFSDirectorySystem()
@@ -41,30 +35,6 @@ bool NTFSDirectorySystem::_loadSearchInfo(DiskHandle *disk)
 
 bool NTFSDirectorySystem::readDisks(uint32_t driveMask, bool reload)
 {
-#if 0
-    if (data > 0 && data < 32)
-    {
-        if (disks[data])
-        {
-            disks[data] = openDisk('A' + data);
-            if (disks[data])
-            {
-                return loadSearchInfo(disks[data]);
-            }
-            else
-            {
-                return false; // The disk couldn't be opened. Run as administrator?
-            }
-        }
-        else if (reload)
-        {
-            return loadSearchInfo(disks[data]);
-        }
-    }
-    else if (data)
-    {
-#endif
-
     if (reload)
     {
         for (int i = 0; i < 32; i++)
@@ -363,11 +333,9 @@ DiskHandle *NTFSDirectorySystem::_openDisk(wchar_t dosDevice)
 
 DiskHandle *NTFSDirectorySystem::_openDisk(wchar_t const *disk)
 {
-    DiskHandle *tmpDisk;
-    unsigned long read;
-    tmpDisk = new DiskHandle;
 
-    // memset(tmpDisk, 0, sizeof(DISKHANDLE));
+    unsigned long read;
+    DiskHandle *tmpDisk = new DiskHandle;
 
     tmpDisk->fileHandle =
         CreateFile(disk, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
@@ -433,22 +401,7 @@ bool NTFSDirectorySystem::_closeDisk(DiskHandle *disk)
             disk->NTFS.bitmap = nullptr;
         }
 
-        /*if (disk->isLong)
-        {
-            if (disk->longFileInfo != nullptr)
-            {
-                delete disk->longFileInfo;
-            }
-            disk->longFileInfo = nullptr;
-        }
-        else
-        {
-            if (disk->shortFileInfo != nullptr)
-            {
-                delete disk->shortFileInfo;
-            }
-            disk->shortFileInfo = nullptr;
-        }*/
+
         delete disk;
         return true;
     }
@@ -588,8 +541,6 @@ void NTFSDirectorySystem::_parseMFT(DiskHandle *disk)
         fh = (FileRecordHeader *)(disk->NTFS.mft);
         _fixFileRecord(fh);
 
-        // disk->isLong = sizeof(SearchInfoFile);
-
         disk->nameInfo.clear();
 
         nattr = (NonresidentAttribute *)_findAttribute(fh, eData);
@@ -716,12 +667,11 @@ uint32_t NTFSDirectorySystem::_readMFTLCN(DiskHandle *disk, uint64_t lcn, uint32
         pos += read;
 
         _processBuffer(disk, (uint8_t *)buffer, read, fetch);
-        // CallMe(info, disk->filesSize);
     }
 
     ReadFile(disk->fileHandle, buffer, (count - c) * disk->NTFS.bytesPerCluster, &read, nullptr);
     _processBuffer(disk, (uint8_t *)buffer, read, fetch);
-    // CallMe(info, disk->filesSize);
+
 
     pos += read;
     return pos;
@@ -931,7 +881,7 @@ static int wcsnrcmp(const wchar_t *first, const wchar_t *last, size_t count)
     return ((int)(*first - *last));
 }
 
-// Prepares the searchpattern struct
+// Prepares the search pattern struct
 SearchPattern *NTFSDirectorySystem::_startSearch(wchar_t *string, size_t len)
 {
     wchar_t *res;
@@ -1023,7 +973,7 @@ bool NTFSDirectorySystem::_searchString(SearchPattern *pattern, wchar_t *string,
 
     return false;
 }
-// just the simple cleanup, because no copies were made
+
 void NTFSDirectorySystem::_endSearch(SearchPattern *pattern)
 {
     delete pattern;

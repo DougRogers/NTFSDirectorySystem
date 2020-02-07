@@ -13,7 +13,6 @@ Drives are specified as a mask. 'A' is bit 0, 'B' is bit '1', 'C' is bit 2.  The
 
 All drives can be specified with ALL_FIXED_DISKS.
 
-If there is interest, I will add a regular expression search.
 
 
 

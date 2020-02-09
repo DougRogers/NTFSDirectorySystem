@@ -848,10 +848,7 @@ std::wstring NTFSDirectorySystem::_path(DiskHandle *disk, int id)
         parentDirectory.push_back(disk->dosDevice);
         parentDirectory.push_back(L':');
     }
-    else
-    {
-        parentDirectory.push_back(L'\0');
-    }
+}
     for (int i = PathStackPos - 1; i > 0; i--)
     {
         pt = PathStack[i];
@@ -864,7 +861,6 @@ std::wstring NTFSDirectorySystem::_path(DiskHandle *disk, int id)
     }
 
     parentDirectory.push_back(L'\\');
-    parentDirectory.push_back(L'\0');
 
     return parentDirectory;
 }

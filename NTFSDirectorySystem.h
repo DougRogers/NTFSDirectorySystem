@@ -10,6 +10,7 @@
 #include <functional>
 #include <malloc.h>
 #include <memory.h>
+
 #include <set>
 #include <stdint.h>
 #include <stdlib.h>
@@ -72,54 +73,61 @@ public:
     int search(int driveMask, std::set<std::wstring> const &extensions, bool deleted,
                DirectoryEntryCallback directoryEntryCallback);
 
-    // TODO: regex
+    int allFiles(int driveMask, bool deleted, DirectoryEntryCallback directoryEntryCallback);
 
     void addToBlackList(std::wstring const &directory);
     void clearBlackList();
 
 private:
-    int _searchFiles(DiskHandle * disk, TCHAR * filename, bool deleted, SearchPattern *pat,
+    int _searchFiles(DiskHandle *disk, TCHAR *filename, bool deleted, SearchPattern *pat,
                      DirectoryEntryCallback directoryEntryCallback);
-    int _searchFiles(DiskHandle * disk, std::set<std::wstring> const &extensions, bool deleted,
+    int _searchFiles(DiskHandle *disk, std::set<std::wstring> const &extensions, bool deleted,
+                     DirectoryEntryCallback directoryEntryCallback);
+    int _searchFiles(DiskHandle *disk, bool deleted, 
                      DirectoryEntryCallback directoryEntryCallback);
 
-    SearchPattern *_startSearch(wchar_t * string, size_t len);
-    bool _searchString(SearchPattern * pattern, wchar_t * string, size_t len);
-    void _endSearch(SearchPattern * pattern);
+    SearchPattern *_startSearch(wchar_t *string, size_t len);
+    bool _searchString(SearchPattern *pattern, wchar_t *string, size_t len);
+    void _endSearch(SearchPattern *pattern);
 
-    bool _loadSearchInfo(DiskHandle * disk);
+    bool _loadSearchInfo(DiskHandle *disk);
 
     void _addToFixList(int entry, int data);
     void _createFixList();
-    void _processFixList(DiskHandle * disk);
+    void _processFixList(DiskHandle *disk);
 
     DiskHandle *_openDisk(wchar_t DosDevice);
     DiskHandle *_openDisk(wchar_t const *disk);
-    bool _closeDisk(DiskHandle * disk);
-    uint64_t _loadMFT(DiskHandle * disk, bool complete);
-    Attribute *_findAttribute(FileRecordHeader * file, AttributeType type);
-    void _parseMFT(DiskHandle * disk);
-    uint32_t _readMFTParse(DiskHandle * disk, NonresidentAttribute * attr, uint64_t vcn, uint32_t count, void *buffer,
+    bool _closeDisk(DiskHandle *disk);
+    uint64_t _loadMFT(DiskHandle *disk, bool complete);
+    NonresidentAttribute *_findAttribute(FILE_RECORD_SEGMENT_HEADER *file, int type);
+    void _parseMFT(DiskHandle *disk);
+    uint32_t _readMFTParse(DiskHandle *disk, NonresidentAttribute *attr, uint64_t vcn, uint32_t count, void *buffer,
                            FetchProcedure fetch);
 
-    uint32_t _runLength(uint8_t * run);
-    int64_t _runLCN(uint8_t * run);
-    uint64_t _runCount(uint8_t * run);
-    bool _findRun(NonresidentAttribute * attr, uint64_t vcn, uint64_t * lcn, uint64_t * count);
+    uint32_t _runLength(uint8_t *run);
+    int64_t _runLCN(uint8_t *run);
+    uint64_t _runCount(uint8_t *run);
+    bool _findRun(NonresidentAttribute *attr, uint64_t vcn, uint64_t *lcn, uint64_t *count);
 
-    uint32_t _readMFTLCN(DiskHandle * disk, uint64_t lcn, uint32_t count, PVOID buffer, FetchProcedure fetch);
+    uint32_t _readMFTLCN(DiskHandle *disk, uint64_t lcn, uint32_t count, PVOID buffer, FetchProcedure fetch);
 
-    void _processBuffer(DiskHandle * disk, uint8_t * buffer, uint32_t size, FetchProcedure fetch);
-    std::wstring _path(DiskHandle * disk, int id);
+    void _processBuffer(DiskHandle *disk, uint8_t *buffer, uint32_t size, FetchProcedure fetch);
+    std::wstring _path(DiskHandle *disk, int id);
 
-    bool _fetchSearchInfo(DiskHandle * disk, FileRecordHeader * file, LongFileInfo * data);
-    bool _fixFileRecord(FileRecordHeader * file);
-    bool _reparseDisk(DiskHandle * disk);
+    bool _fetchSearchInfo(DiskHandle *disk, FILE_RECORD_SEGMENT_HEADER *file, LongFileInfo *longFileInfo);
+    bool _fixFileRecord(FILE_RECORD_SEGMENT_HEADER *file);
+    bool _reparseDisk(DiskHandle *disk);
 
     std::wstring _extension(std::wstring const &fileName);
 
     bool _startsWith(std::wstring const &name, std::wstring const &start);
 
+    //void fixRecord2(BYTE *buffer, DWORD recordSize, DWORD sectorSize);
+
+    LPBYTE NTFSDirectorySystem::findAttribute2(
+        FILE_RECORD_SEGMENT_HEADER *record, DWORD recordSize, DWORD typeID,
+        std::function<bool(LPBYTE)> condition = [&](LPBYTE) { return true; });
     LinkItem *fixlist = nullptr;
     LinkItem *curfix = nullptr;
 

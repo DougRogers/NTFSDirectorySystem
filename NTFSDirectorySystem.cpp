@@ -1,33 +1,11 @@
 #include "NTFSDirectorySystem.h"
+#include <winioctl.h>
 
-
+// https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-fscc/a5bae3a3-9025-4f07-b70d-e2247b01faa6
 
 NTFSDirectorySystem::NTFSDirectorySystem()
 {
     memset(disks, 0, sizeof(DiskHandle *) * 32);
-}
-
-bool NTFSDirectorySystem::_loadSearchInfo(DiskHandle *disk)
-{
-    uint64_t res;
-    if (disk->filesSize == 0)
-    {
-        if (res = _loadMFT(disk, FALSE) != 0)
-        {
-            _parseMFT(disk);
-            return true;
-        }
-        else
-        {
-            return false;
-        }
-    }
-    else
-    {
-        return _reparseDisk(disk);
-    }
-
-    return true;
 }
 
 // mask for drives
@@ -35,6 +13,7 @@ bool NTFSDirectorySystem::_loadSearchInfo(DiskHandle *disk)
 
 bool NTFSDirectorySystem::readDisks(uint32_t driveMask, bool reload)
 {
+
     if (reload)
     {
         for (int i = 0; i < 32; i++)
@@ -87,16 +66,15 @@ bool NTFSDirectorySystem::readDisks(uint32_t driveMask, bool reload)
     return true;
 }
 
-int NTFSDirectorySystem::search(int diskMask, std::set<std::wstring> const &extensions, bool deleted,
-                              DirectoryEntryCallback directoryEntryCallback)
+int NTFSDirectorySystem::search(int driveMask, std::set<std::wstring> const &extensions, bool deleted,
+                                DirectoryEntryCallback directoryEntryCallback)
 {
 
     uint32_t ret = 0;
 
- 
     for (int i = 0; i < 32; i++)
     {
-        if ((diskMask & (1 << i)) && disks[i])
+        if ((driveMask & (1 << i)) && disks[i])
         {
             ret += _searchFiles(disks[i], extensions, deleted, directoryEntryCallback);
         }
@@ -105,8 +83,8 @@ int NTFSDirectorySystem::search(int diskMask, std::set<std::wstring> const &exte
     return ret;
 }
 
-int NTFSDirectorySystem::search(int diskMask, wchar_t *filename, bool deleted,
-                              DirectoryEntryCallback directoryEntryCallback)
+int NTFSDirectorySystem::search(int driveMask, wchar_t *filename, bool deleted,
+                                DirectoryEntryCallback directoryEntryCallback)
 {
     uint32_t ret = 0;
 
@@ -120,7 +98,7 @@ int NTFSDirectorySystem::search(int diskMask, wchar_t *filename, bool deleted,
 
     for (int i = 0; i < 32; i++)
     {
-        if ((diskMask & (1 << i)) && disks[i])
+        if ((driveMask & (1 << i)) && disks[i])
         {
             if (disks[i] != nullptr)
             {
@@ -134,8 +112,46 @@ int NTFSDirectorySystem::search(int diskMask, wchar_t *filename, bool deleted,
     return ret;
 }
 
+int NTFSDirectorySystem::allFiles(int driveMask, bool deleted, DirectoryEntryCallback directoryEntryCallback)
+{
+
+    uint32_t ret = 0;
+
+    for (int i = 0; i < 32; i++)
+    {
+        if ((driveMask & (1 << i)) && disks[i])
+        {
+            ret += _searchFiles(disks[i], deleted, directoryEntryCallback);
+        }
+    }
+
+    return ret;
+}
+
+bool NTFSDirectorySystem::_loadSearchInfo(DiskHandle *disk)
+{
+    uint64_t res;
+    if (disk->filesSize == 0)
+    {
+        if (res = _loadMFT(disk, FALSE) != 0)
+        {
+            _parseMFT(disk);
+            return true;
+        }
+        else
+        {
+            return false;
+        }
+    }
+    else
+    {
+        return _reparseDisk(disk);
+    }
+
+    return true;
+}
 int NTFSDirectorySystem::_searchFiles(DiskHandle *disk, wchar_t *filename, bool deleted, SearchPattern *pat,
-                                   DirectoryEntryCallback directoryEntryCallback)
+                                      DirectoryEntryCallback directoryEntryCallback)
 {
     int hits = 0;
 
@@ -208,7 +224,7 @@ bool NTFSDirectorySystem::_startsWith(std::wstring const &name, std::wstring con
 }
 
 int NTFSDirectorySystem::_searchFiles(DiskHandle *disk, std::set<std::wstring> const &extensions, bool deleted,
-                                   DirectoryEntryCallback directoryEntryCallback)
+                                      DirectoryEntryCallback directoryEntryCallback)
 {
     int hits = 0;
 
@@ -258,6 +274,74 @@ int NTFSDirectorySystem::_searchFiles(DiskHandle *disk, std::set<std::wstring> c
     return hits;
 }
 
+int NTFSDirectorySystem::_searchFiles(DiskHandle *disk, bool deleted, DirectoryEntryCallback directoryEntryCallback)
+{
+    int hits = 0;
+    bool res = 0;
+    auto &info = disk->fileInfo;
+
+    if (!_blackList.empty())
+    {
+        for (auto i = 0ul; i < disk->filesSize; i++)
+        {
+            if (deleted || (info[i].flags & IN_USE))
+            {
+                if (info[i].fileName != nullptr)
+                {
+                    std::wstring fileName(info[i].fileName);
+
+                    std::wstring path = _path(disk, i);
+
+                    bool onBlackList = false;
+                    for (auto &blackName : _blackList)
+                    {
+                        if (_startsWith(path, blackName))
+                        {
+                            onBlackList = true;
+                            break;
+                        }
+                    }
+
+                    if (onBlackList)
+                    {
+                        continue;
+                    }
+
+                    if (!(info[i].flags & IS_DIRECTORY))
+                    {
+                        directoryEntryCallback(path, fileName);
+                    }
+
+                    hits++;
+                }
+            }
+        }
+    }
+    else
+    {
+        for (auto i = 0ul; i < disk->filesSize; i++)
+        {
+            if (deleted || (info[i].flags & IN_USE))
+            {
+                if (info[i].fileName != nullptr)
+                {
+
+                    if (!(info[i].flags & IS_DIRECTORY))
+                    {
+                        std::wstring fileName(info[i].fileName);
+                        std::wstring path = _path(disk, i);
+                        directoryEntryCallback(path, fileName);
+                    }
+
+                    hits++;
+                }
+            }
+        }
+    }
+
+    return hits;
+}
+
 void NTFSDirectorySystem::_addToFixList(int entry, int data)
 {
     curfix->entry = entry;
@@ -276,7 +360,6 @@ void NTFSDirectorySystem::_createFixList()
 
 void NTFSDirectorySystem::_processFixList(DiskHandle *disk)
 {
-
     while (fixlist->next != nullptr)
     {
         auto &info = disk->fileInfo[fixlist->entry];
@@ -286,8 +369,6 @@ void NTFSDirectorySystem::_processFixList(DiskHandle *disk)
 
         info.parentId = src.parentId;
 
-        // hide all that we used for cleanup
-        src.parentId.QuadPart = 0;
         LinkItem *item;
         item = fixlist;
         fixlist = fixlist->next;
@@ -306,8 +387,6 @@ void NTFSDirectorySystem::addToBlackList(std::wstring const &directory)
 {
     _blackList.push_back(directory);
 }
-
-
 
 // NONRESIDENT_ATTRIBUTE ERROR_ATTRIBUTE = {1,2,3,4,5};
 #define CLUSTERS_PER_READ 1024
@@ -331,10 +410,14 @@ DiskHandle *NTFSDirectorySystem::_openDisk(wchar_t dosDevice)
     return nullptr;
 }
 
+#define BUFFER_SIZE (1024 * 1024)
+
 DiskHandle *NTFSDirectorySystem::_openDisk(wchar_t const *disk)
 {
 
-    unsigned long read;
+    unsigned long read1;
+    unsigned long read2;
+
     DiskHandle *tmpDisk = new DiskHandle;
 
     tmpDisk->fileHandle =
@@ -342,36 +425,46 @@ DiskHandle *NTFSDirectorySystem::_openDisk(wchar_t const *disk)
 
     if (tmpDisk->fileHandle != INVALID_HANDLE_VALUE)
     {
-        BOOL b = DeviceIoControl(tmpDisk->fileHandle,        // handle to device
-                                 FSCTL_GET_NTFS_VOLUME_DATA, // dwIoControlCodeNULL,
-                                 nullptr, 0, &tmpDisk->NTFS.volumeData, sizeof(NtfsVolumeData),
-                                 &read,    // size of output buffer
-                                 nullptr); // OVERLAPPED structure
+        int bbs = sizeof(BootBlock);
+        int bbs2 = sizeof(PACKED_BOOT_SECTOR);
 
-        if (read == sizeof(NtfsVolumeData))
+        BOOL b1 = ReadFile(tmpDisk->fileHandle, &tmpDisk->bootBlock, sizeof(PACKED_BOOT_SECTOR), &read1, NULL);
+
+        BOOL b2 = DeviceIoControl(tmpDisk->fileHandle,        // handle to device
+                                  FSCTL_GET_NTFS_VOLUME_DATA, // dwIoControlCodeNULL,
+                                  nullptr, 0, &tmpDisk->NTFS.volumeData, sizeof(NtfsVolumeData),
+                                  &read2,   // size of output buffer
+                                  nullptr); // OVERLAPPED structure
+
+        if ((read1 == sizeof(PACKED_BOOT_SECTOR)) && (read2 == sizeof(NtfsVolumeData)) && b1 && b2)
         {
-            // if (strncmp("NTFS", (const char *)&tmpDisk->NTFS.bootSector.format, 4) == 0)
-            if (b)
+            if (strncmp("NTFS", (const char *)&tmpDisk->bootBlock.Oem, 4) == 0)
             {
+
                 tmpDisk->type = eNTFS_DISK;
 
-                tmpDisk->NTFS.bytesPerCluster = tmpDisk->NTFS.volumeData.BytesPerCluster;
-                tmpDisk->NTFS.bytesPerFileRecord = tmpDisk->NTFS.volumeData.BytesPerFileRecordSegment;
+                auto &volumeData = tmpDisk->NTFS.volumeData;
+
+                tmpDisk->NTFS.bytesPerCluster = volumeData.BytesPerCluster;
+                tmpDisk->NTFS.bytesPerFileRecord = volumeData.BytesPerFileRecordSegment;
 
                 tmpDisk->NTFS.complete = false;
-                tmpDisk->NTFS.mftLocation.QuadPart =
-                    tmpDisk->NTFS.volumeData.MftStartLcn.QuadPart * tmpDisk->NTFS.volumeData.BytesPerCluster;
+                tmpDisk->NTFS.mftLocation.QuadPart = volumeData.MftStartLcn.QuadPart * volumeData.BytesPerCluster;
 
                 tmpDisk->NTFS.mft = nullptr;
 
                 tmpDisk->NTFS.sizeMFT = 0;
-            }
-            else
-            {
-                tmpDisk->type = eUNKNOWN_DISK;
+
+                // volumeData.ClustersPerFileRecordSegment is reading zero
+
+                tmpDisk->NTFS.recordSize = tmpDisk->bootBlock.ClustersPerFileRecordSegment * volumeData.BytesPerCluster;
+                int t = 1;
             }
         }
-
+        else
+        {
+            tmpDisk->type = eUNKNOWN_DISK;
+        }
         return tmpDisk;
     }
 
@@ -381,7 +474,7 @@ DiskHandle *NTFSDirectorySystem::_openDisk(wchar_t const *disk)
 
 bool NTFSDirectorySystem::_closeDisk(DiskHandle *disk)
 {
-    if (disk != nullptr)
+    if (disk)
     {
         if (disk->fileHandle > INVALID_HANDLE_VALUE)
         {
@@ -401,21 +494,14 @@ bool NTFSDirectorySystem::_closeDisk(DiskHandle *disk)
             disk->NTFS.bitmap = nullptr;
         }
 
-
         delete disk;
         return true;
     }
     return false;
-};
+}
 
 uint64_t NTFSDirectorySystem::_loadMFT(DiskHandle *disk, bool complete)
 {
-    unsigned long read;
-    ULARGE_INTEGER offset;
-    uint8_t *buf;
-    FileRecordHeader *file;
-    NonresidentAttribute *nattr, *nattr2;
-
     if (disk == nullptr)
     {
         return 0;
@@ -423,39 +509,43 @@ uint64_t NTFSDirectorySystem::_loadMFT(DiskHandle *disk, bool complete)
 
     if (disk->type == eNTFS_DISK)
     {
-        offset = disk->NTFS.mftLocation;
+        unsigned long read;
+        NonresidentAttribute *nattr, *nattr2;
 
-        SetFilePointer(disk->fileHandle, offset.LowPart, (PLONG)&offset.HighPart, FILE_BEGIN);
-        buf = new uint8_t[disk->NTFS.bytesPerCluster];
+        ULARGE_INTEGER offset = disk->NTFS.mftLocation;
+
+        SetFilePointer(disk->fileHandle, offset.LowPart, (long *)&offset.HighPart, FILE_BEGIN);
+        uint8_t *buf = new uint8_t[disk->NTFS.bytesPerCluster];
         ReadFile(disk->fileHandle, buf, disk->NTFS.bytesPerCluster, &read, nullptr);
 
-        file = (FileRecordHeader *)(buf);
+        FILE_RECORD_SEGMENT_HEADER *file = (FILE_RECORD_SEGMENT_HEADER *)(buf);
 
         _fixFileRecord(file);
+        //_fixRecord(buf, disk->NTFS.recordSize, disk->bootBlock.PackedBpb.BytesPerSector);
 
-        if (file->Ntfs.type == 'ELIF')
+        if (strncmp((char *)file->MultiSectorHeader.Signature, "FILE", 4) == 0)
         {
-            // FileNameAttribute *fn;
-            LongFileInfo *data = (LongFileInfo *)buf;
-            Attribute *attr = (Attribute *)((uint8_t *)(file) + file->attributesOffset);
-            int stop = std::min(8, (int)file->nextAttributeNumber);
+            uint8_t *ptr = (uint8_t *)(file) + file->FirstAttributeOffset;
 
-            data->flags = file->flags;
-
-            for (int i = 0; i < stop; i++)
+            while (true)
             {
-                if (attr->attributeType < 0 || attr->attributeType > 0x100)
+                if (ptr + sizeof(NonresidentAttribute) > LPBYTE(file) + disk->NTFS.recordSize)
+                {
+                    break;
+                }
+                NonresidentAttribute *attr = (NonresidentAttribute *)ptr;
+                if (attr->attributeType == $END)
                 {
                     break;
                 }
 
                 switch (attr->attributeType)
                 {
-                    case eAttributeList:
+                    case $ATTRIBUTE_LIST:
                         // now it gets tricky
                         // we have to rebuild the data attribute
 
-                        // wake down the list to find all runarrays
+                        // walk down the list to find all runarrays
                         // use ReadAttribute to get the list
                         // I think, the right order is important
 
@@ -464,23 +554,34 @@ uint64_t NTFSDirectorySystem::_loadMFT(DiskHandle *disk, bool complete)
                         // the only solution for now
                         return 3;
                         break;
-                    case eData:
-                        nattr = static_cast<NonresidentAttribute *>(attr);
+
+                    case $DATA:
+                        nattr = attr;
                         break;
-                    case eBitmap:
-                        nattr2 = static_cast<NonresidentAttribute *>(attr);
+
+                    case $BITMAP:
+                        nattr2 = attr;
+                        break;
+
+                    case $STANDARD_INFORMATION:
+                    case $FILE_NAME:
+                    case $OBJECT_ID:
+                    case $SECURITY_DESCRIPTOR:
+                    case $VOLUME_NAME:
+                    case $VOLUME_INFORMATION:
+                    case $INDEX_ROOT:
+                    case $INDEX_ALLOCATION:
+                    case $SYMBOLIC_LINK:
+                    case $EA_INFORMATION:
+                    case $EA:
+                    case $FIRST_USER_DEFINED_ATTRIBUTE:
+                        break;
                     default:
+
                         break;
                 };
 
-                if (attr->length > 0 && attr->length < file->bytesInUse)
-                {
-                    attr = (Attribute *)((uint8_t *)(attr) + attr->length);
-                }
-                else if (attr->nonresident == true)
-                {
-                    attr = (Attribute *)((uint8_t *)(attr) + sizeof(NonresidentAttribute));
-                }
+                ptr += attr->length;
             }
             if (nattr == nullptr)
             {
@@ -497,32 +598,49 @@ uint64_t NTFSDirectorySystem::_loadMFT(DiskHandle *disk, bool complete)
         disk->NTFS.entryCount = disk->NTFS.sizeMFT / disk->NTFS.bytesPerFileRecord;
         return nattr->dataSize;
     }
+
     return 0;
-};
+}
 
-Attribute *NTFSDirectorySystem::_findAttribute(FileRecordHeader *file, AttributeType type)
+LPBYTE NTFSDirectorySystem::findAttribute2(FILE_RECORD_SEGMENT_HEADER *file, DWORD recordSize, DWORD typeID,
+                                           std::function<bool(LPBYTE)> condition)
 {
-    Attribute *attr = (Attribute *)((uint8_t *)(file) + file->attributesOffset);
-
-    for (int i = 1; i < file->nextAttributeNumber; i++)
+    LPBYTE p = LPBYTE(file) + file->FirstAttributeOffset;
+    while (true)
     {
+        if (p + sizeof(ResidentAttribute) > LPBYTE(file) + recordSize)
+            break;
+
+        ResidentAttribute *attr = (ResidentAttribute *)p;
+        if (attr->attributeType == 0xffffffff)
+            break;
+
+        if (attr->attributeType == typeID && p + attr->length <= LPBYTE(file) + recordSize && condition(p))
+            return p;
+
+        p += attr->length;
+    }
+    return NULL;
+}
+
+NonresidentAttribute *NTFSDirectorySystem::_findAttribute(FILE_RECORD_SEGMENT_HEADER *file, int type)
+{
+    uint8_t *ptr = (uint8_t *)(file) + file->FirstAttributeOffset;
+
+    for (int i = 1; i < file->FirstAttributeOffset; i++)
+    {
+        NonresidentAttribute *attr = (NonresidentAttribute *)ptr;
         if (attr->attributeType == type)
         {
             return attr;
         }
 
-        if (attr->attributeType < 1 || attr->attributeType > 0x100)
+        if (attr->attributeType == $END)
         {
             break;
         }
-        if (attr->length > 0 && attr->length < file->bytesInUse)
-        {
-            attr = (Attribute *)((uint8_t *)(attr) + attr->length);
-        }
-        else if (attr->nonresident == true)
-        {
-            attr = (Attribute *)((uint8_t *)(attr) + sizeof(NonresidentAttribute));
-        }
+
+        ptr += attr->length;
     }
     return nullptr;
 }
@@ -530,7 +648,7 @@ Attribute *NTFSDirectorySystem::_findAttribute(FileRecordHeader *file, Attribute
 void NTFSDirectorySystem::_parseMFT(DiskHandle *disk)
 {
     uint8_t *buffer;
-    FileRecordHeader *fh;
+
     NonresidentAttribute *nattr;
     uint32_t index = 0;
 
@@ -538,12 +656,13 @@ void NTFSDirectorySystem::_parseMFT(DiskHandle *disk)
     {
         _createFixList();
 
-        fh = (FileRecordHeader *)(disk->NTFS.mft);
+        FILE_RECORD_SEGMENT_HEADER *fh = (FILE_RECORD_SEGMENT_HEADER *)(disk->NTFS.mft);
         _fixFileRecord(fh);
+        // fixRecord2(disk->NTFS.mft, disk->NTFS.recordSize, disk->bootBlock.PackedBpb.BytesPerSector);
 
         disk->nameInfo.clear();
 
-        nattr = (NonresidentAttribute *)_findAttribute(fh, eData);
+        nattr = _findAttribute(fh, $DATA);
         if (nattr != nullptr)
         {
             buffer = new uint8_t[CLUSTERS_PER_READ * disk->NTFS.bytesPerCluster];
@@ -563,8 +682,7 @@ uint32_t NTFSDirectorySystem::_readMFTParse(DiskHandle *disk, NonresidentAttribu
     uint32_t ret = 0;
     uint8_t *bytes = (uint8_t *)(buffer);
 
-    // not sure what the 16 is for
-    disk->fileInfo.resize(disk->NTFS.entryCount + 16);
+    disk->fileInfo.resize(disk->NTFS.entryCount);
 
     for (left = count; left > 0; left -= readcount)
     {
@@ -672,7 +790,6 @@ uint32_t NTFSDirectorySystem::_readMFTLCN(DiskHandle *disk, uint64_t lcn, uint32
     ReadFile(disk->fileHandle, buffer, (count - c) * disk->NTFS.bytesPerCluster, &read, nullptr);
     _processBuffer(disk, (uint8_t *)buffer, read, fetch);
 
-
     pos += read;
     return pos;
 }
@@ -681,24 +798,24 @@ void NTFSDirectorySystem::_processBuffer(DiskHandle *disk, uint8_t *buffer, uint
 {
     uint8_t *end;
     uint32_t count = 0;
-    FileRecordHeader *fh;
 
     end = (uint8_t *)(buffer) + size;
 
-    LongFileInfo *data = &disk->fileInfo[disk->filesSize];
+    LongFileInfo *longFileInfo = &disk->fileInfo[disk->filesSize];
 
     while (buffer < end)
     {
-        fh = (FileRecordHeader *)(buffer);
+        FILE_RECORD_SEGMENT_HEADER *fh = (FILE_RECORD_SEGMENT_HEADER *)(buffer);
         _fixFileRecord(fh);
+        // fixRecord2(buffer, disk->NTFS.recordSize, disk->bootBlock.PackedBpb.BytesPerSector);
 
-        if (_fetchSearchInfo(disk, fh, data))
+        if (_fetchSearchInfo(disk, fh, longFileInfo))
         {
             disk->realFiles++;
         }
         buffer += disk->NTFS.bytesPerFileRecord;
 
-        data++;
+        longFileInfo++;
         disk->filesSize++;
     }
 }
@@ -719,7 +836,7 @@ std::wstring NTFSDirectorySystem::_path(DiskHandle *disk, int id)
         PathStack[PathStackPos++] = a;
 
         LongFileInfo &sfi = disk->fileInfo[a];
-        a = sfi.parentId.LowPart;
+        a = sfi.parentId.SegmentNumberLowPart;
 
         if (a == 0 || a == 5)
         {
@@ -752,99 +869,94 @@ std::wstring NTFSDirectorySystem::_path(DiskHandle *disk, int id)
     return parentDirectory;
 }
 
-bool NTFSDirectorySystem::_fetchSearchInfo(DiskHandle *disk, FileRecordHeader *file, LongFileInfo *data)
+bool NTFSDirectorySystem::_fetchSearchInfo(DiskHandle *disk, FILE_RECORD_SEGMENT_HEADER *file,
+                                           LongFileInfo *longFileInfo)
 {
-    FileNameAttribute *fn;
-    Attribute *attr = (Attribute *)((uint8_t *)(file) + file->attributesOffset);
-    int stop = std::min(8, (int)file->nextAttributeNumber);
-    ResidentAttribute *residentAttribute;
+    FILE_NAME *fn;
+    uint8_t *ptr = (uint8_t *)(file) + file->FirstAttributeOffset;
 
-    if (file->Ntfs.type == 'ELIF')
+    if (strncmp((char *)file->MultiSectorHeader.Signature, "FILE", 4) == 0)
     {
-        data->flags = file->flags;
+        longFileInfo->flags = file->Flags;
 
-        for (int i = 0; i < stop; i++)
+        while (true)
         {
-            if (attr->attributeType < 0 || attr->attributeType > 0x100)
+
+            if (ptr + sizeof(ResidentAttribute) > LPBYTE(file) + disk->NTFS.recordSize)
             {
                 break;
             }
 
-            switch (attr->attributeType)
-            {
-                case eFileName:
-                    residentAttribute = static_cast<ResidentAttribute *>(attr);
+            ResidentAttribute *residentAttribute = (ResidentAttribute *)ptr;
 
-                    fn = (FileNameAttribute *)((uint8_t *)(attr) + residentAttribute->valueOffset);
-                    if (fn->nameType & eWIN32_NAME || fn->nameType == 0)
+            if (residentAttribute->attributeType == $END)
+            {
+                break;
+            }
+
+            switch (residentAttribute->attributeType)
+            {
+                case $FILE_NAME:
+                    fn = (FILE_NAME *)(ptr + residentAttribute->valueOffset);
+                    if (fn->Flags & eWIN32_NAME || fn->Flags == 0)
                     {
-                        fn->name[fn->nameLength] = L'\0';
+                        fn->FileName[fn->FileNameLength] = L'\0';
 
                         auto index = disk->nameInfo.size();
-                        disk->nameInfo.push_back(std::wstring(fn->name));
-                        data->fileName = disk->nameInfo[index].c_str();
+                        disk->nameInfo.push_back(std::wstring(fn->FileName));
+                        longFileInfo->fileName = disk->nameInfo[index].c_str();
 
-                        data->fileNameLength = (uint16_t)disk->nameInfo.back().size();
+                        longFileInfo->fileNameLength = (uint16_t)disk->nameInfo.back().size();
 
-                        data->parentId.QuadPart = fn->directoryFileReferenceNumber;
-                        data->parentId.HighPart &= 0x0000ffff;
-                        if (file->baseFileRecord.LowPart != 0) // && file->BaseFileRecord.HighPart !=0x10000)
+                        longFileInfo->parentId = fn->ParentDirectory;
+
+                        if (file->BaseFileRecordSegment.SegmentNumberLowPart != 0)
                         {
-                            _addToFixList(file->baseFileRecord.LowPart, disk->filesSize);
+                            _addToFixList(file->BaseFileRecordSegment.SegmentNumberLowPart, disk->filesSize);
                         }
 
                         return true;
                     }
                     break;
+                case $ATTRIBUTE_LIST:
+                case $DATA:
+                case $BITMAP:
+                case $STANDARD_INFORMATION:         // 0x10,
+                case $OBJECT_ID:                    // 0x40,
+                case $SECURITY_DESCRIPTOR:          // 0x50,
+                case $VOLUME_NAME:                  // 0x60,
+                case $VOLUME_INFORMATION:           // 0x70,
+                case $INDEX_ROOT:                   // 0x90,
+                case $INDEX_ALLOCATION:             // 0xA0,
+                case $SYMBOLIC_LINK:                // 0xC0,
+                case $EA_INFORMATION:               // 0xD0,
+                case $EA:                           // 0xE0,
+                case $FIRST_USER_DEFINED_ATTRIBUTE: // 0x100
+                    break;
 
                 default:
                     break;
-            };
+            }
 
-            if (attr->length > 0 && attr->length < file->bytesInUse)
-            {
-                attr = (Attribute *)((uint8_t *)(attr) + attr->length);
-            }
-            else if (attr->nonresident == true)
-            {
-                attr = (Attribute *)((uint8_t *)(attr) + sizeof(NonresidentAttribute));
-            }
+            ptr += residentAttribute->length;
         }
     }
     return false;
 }
 
-bool NTFSDirectorySystem::_fixFileRecord(FileRecordHeader *file)
-{
-    uint16_t *usa = (uint16_t *)((uint8_t *)(file) + file->Ntfs.usaOffset);
-    uint16_t *sector = (uint16_t *)(file);
-
-    if (file->Ntfs.usaCount > 4)
-    {
-        return false;
-    }
-    for (uint32_t i = 1; i < file->Ntfs.usaCount; i++)
-    {
-        sector[255] = usa[i];
-        sector += 256;
-    }
-
-    return true;
-}
-
 bool NTFSDirectorySystem::_reparseDisk(DiskHandle *disk)
 {
-    if (disk != nullptr)
+    if (disk)
     {
         if (disk->type == eNTFS_DISK)
         {
-            if (disk->NTFS.mft != nullptr)
+            if (disk->NTFS.mft)
             {
                 delete disk->NTFS.mft;
             }
             disk->NTFS.mft = nullptr;
 
-            if (disk->NTFS.bitmap != nullptr)
+            if (disk->NTFS.bitmap)
             {
                 delete disk->NTFS.bitmap;
             }
@@ -864,8 +976,6 @@ bool NTFSDirectorySystem::_reparseDisk(DiskHandle *disk)
     }
     return false;
 };
-
-
 
 static int wcsnrcmp(const wchar_t *first, const wchar_t *last, size_t count)
 {
@@ -977,4 +1087,39 @@ bool NTFSDirectorySystem::_searchString(SearchPattern *pattern, wchar_t *string,
 void NTFSDirectorySystem::_endSearch(SearchPattern *pattern)
 {
     delete pattern;
+}
+
+/*
+void NTFSDirectorySystem::fixRecord2(BYTE *buffer, DWORD recordSize, DWORD sectorSize)
+{
+    FILE_RECORD_SEGMENT_HEADER *header = (FILE_RECORD_SEGMENT_HEADER *)buffer;
+    LPWORD update = LPWORD(buffer + header->MultiSectorHeader.UpdateSequenceArrayOffset);
+
+    if (LPBYTE(update + header->MultiSectorHeader.UpdateSequenceArraySize) > buffer + recordSize)
+    {
+        throw _T("Update sequence number is invalid");
+    }
+
+    for (int i = 1; i < header->MultiSectorHeader.UpdateSequenceArraySize; i++)
+    {
+        *LPWORD(buffer + i * sectorSize - 2) = update[i];
+    }
+}*/
+
+bool NTFSDirectorySystem::_fixFileRecord(FILE_RECORD_SEGMENT_HEADER *file)
+{
+    uint16_t *usa = (uint16_t *)((uint8_t *)(file) + file->MultiSectorHeader.UpdateSequenceArrayOffset);
+    uint16_t *sector = (uint16_t *)(file);
+
+    if (file->MultiSectorHeader.UpdateSequenceArraySize > 4)
+    {
+        return false;
+    }
+    for (uint32_t i = 1; i < file->MultiSectorHeader.UpdateSequenceArraySize; i++)
+    {
+        sector[255] = usa[i];
+        sector += 256;
+    }
+
+    return true;
 }

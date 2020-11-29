@@ -3,13 +3,18 @@
 #include "targetver.h"
 
 #define WIN32_LEAN_AND_MEAN // Exclude rarely-used stuff from Windows headers
+#define NOMINMAX
 
 #include <windows.h>
+#include <winternl.h>
 
 #include <algorithm>
 #include <functional>
 #include <malloc.h>
 #include <memory.h>
+#include <set>
+#include <vector>
+#include <unordered_set>
 
 #include <set>
 #include <stdint.h>
@@ -21,8 +26,6 @@
 struct SearchPattern;
 class DiskHandle;
 struct LinkItem;
-
-typedef std::function<void(std::wstring const &, std::wstring const &)> DirectoryEntryCallback;
 
 struct SearchPattern
 {
@@ -63,28 +66,41 @@ struct SearchPattern
 
 #define ALL_FIXED_DISKS 0xFF
 
+typedef std::vector<std::string> StringList;
+typedef std::string String;
+#define Set std::set
+#define USet std::unordered_set
+#define Vector std::vector
+
+void signalFileName(String const &filePath);
+void signalDirectoryProgress(size_t n, size_t total, String const &text);
+
 class NTFSDirectorySystem
 {
+
 public:
     NTFSDirectorySystem();
 
-    bool readDisks(uint32_t driveMask, bool reload);
-    int search(int driveMask, wchar_t *filename, bool deleted, DirectoryEntryCallback directoryEntryCallback);
-    int search(int driveMask, std::set<std::wstring> const &extensions, bool deleted,
-               DirectoryEntryCallback directoryEntryCallback);
+    bool readDisks(uint32_t driveMask, bool reload = false);
 
-    int allFiles(int driveMask, bool deleted, DirectoryEntryCallback directoryEntryCallback);
+    // int searchForFilesViaRegularExpression(int driveMask, QString const &filename, bool deleted);
+    int searchForFilesViaExtensions(int driveMask, std::unordered_set<String> const &extensions, bool deleted = false);
 
-    void addToBlackList(std::wstring const &directory);
+    int gatherAllFiles(int driveMask, bool deleted);
+    int gatherAllDirectories(int driveMask, bool deleted);
+
+    void addToBlackList(String const &directory);
     void clearBlackList();
+    void closeDisks();
+
+    // signals:
 
 private:
-    int _searchFiles(DiskHandle *disk, TCHAR *filename, bool deleted, SearchPattern *pat,
-                     DirectoryEntryCallback directoryEntryCallback);
-    int _searchFiles(DiskHandle *disk, std::set<std::wstring> const &extensions, bool deleted,
-                     DirectoryEntryCallback directoryEntryCallback);
-    int _searchFiles(DiskHandle *disk, bool deleted, 
-                     DirectoryEntryCallback directoryEntryCallback);
+    int _searchForFilesViaRegularExpression(DiskHandle *disk, TCHAR *filename, bool deleted, SearchPattern *pat);
+    int _searchForFilesViaExtensions(DiskHandle *disk, std::unordered_set<std::wstring> const &extensions,
+                                     bool deleted);
+    int _gatherAllFiles(DiskHandle *disk, bool deleted);
+    int _gatherAllDirectories(DiskHandle *disk, bool deleted);
 
     SearchPattern *_startSearch(wchar_t *string, size_t len);
     bool _searchString(SearchPattern *pattern, wchar_t *string, size_t len);
@@ -113,21 +129,20 @@ private:
     uint32_t _readMFTLCN(DiskHandle *disk, uint64_t lcn, uint32_t count, PVOID buffer, FetchProcedure fetch);
 
     void _processBuffer(DiskHandle *disk, uint8_t *buffer, uint32_t size, FetchProcedure fetch);
-    std::wstring _path(DiskHandle *disk, int id);
+    std::wstring _path(DiskHandle *disk, uint32_t id);
 
     bool _fetchSearchInfo(DiskHandle *disk, FILE_RECORD_SEGMENT_HEADER *file, LongFileInfo *longFileInfo);
     bool _fixFileRecord(FILE_RECORD_SEGMENT_HEADER *file);
     bool _reparseDisk(DiskHandle *disk);
 
+    void _saveFileName(std::wstring const &path, std::wstring const &fileName);
+
     std::wstring _extension(std::wstring const &fileName);
 
     bool _startsWith(std::wstring const &name, std::wstring const &start);
+    wchar_t *_allocateString(DiskHandle *disk, wchar_t *fileName, int size);
 
-    //void fixRecord2(BYTE *buffer, DWORD recordSize, DWORD sectorSize);
-
-    LPBYTE NTFSDirectorySystem::findAttribute2(
-        FILE_RECORD_SEGMENT_HEADER *record, DWORD recordSize, DWORD typeID,
-        std::function<bool(LPBYTE)> condition = [&](LPBYTE) { return true; });
+private:
     LinkItem *fixlist = nullptr;
     LinkItem *curfix = nullptr;
 
